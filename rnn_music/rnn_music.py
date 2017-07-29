@@ -1,14 +1,22 @@
 from mygrad import Tensor
-from mygrad.nnet.activations import sigmoid, tanh
+from mygrad.nnet.activations import sigmoid, tanh, softmax
 from mygrad.nnet.layers import dense
 from mygrad.math import log
 import numpy as np
 import mido
+import os.path
+import pickle
 
+# last ky is 'split' key (indicates when to move to next line)
+keys = ["!", "$", "%", "&", "(", ")", "*", "+", ",", "-", ".", "/", "0", "1", "2", "3", "4", "5", "6",
+        "7", "8", "9", ":", ";", "<", "=", ">", "?", "@", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O",
+        "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "[", "]", "^", "_", "`", "a", "b", "c", "d", "e", "f", "g", "h", "i",
+        "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "{", "|", " "]
 
-def train_model_arr(data, k=5, hd=100, wub=None, hin1=None, hin2=None) :
+rnn_data = []
+
+def train_model(data, k=5, hd=700, wub=None, hin1=None, hin2=None) :
     """
-    OLD MODEL - TRAINS ON ARRAYS
     Trains model of RNN
 
     Parameters
@@ -24,7 +32,8 @@ def train_model_arr(data, k=5, hd=100, wub=None, hin1=None, hin2=None) :
     hin: Tensor; optional
         output from previous training
     """
-    md = len(data[0])
+    # initialize weights
+    md = len(keys)
     wz1 = Tensor(he_normal((hd, hd))) if wub is None else wub[0, 0]
     uz1 = Tensor(he_normal((hd, md))) if wub is None else wub[0, 1]
     bz1 = Tensor(np.zeros((hd, 1), dtype=wz1.dtype)) if wub is None else wub[0, 2]
@@ -54,15 +63,20 @@ def train_model_arr(data, k=5, hd=100, wub=None, hin1=None, hin2=None) :
     hin2 = Tensor(he_normal((hd, 1))) if hin2 is None else hin2
     loss = Tensor(0)
 
-    for t in range(len(data) - 1) :
-        hout1, hout2 = forward_pass(data[t], hin1, hin2, wub[:2])
-        loss += cross_entropy(sigmoid(dense(v, hout2) + c), data[t + 1])
+    for i in range(len(data) - 1) :
+        x = one_hot_encode(data, i)
 
-        if (t != 0) and (t % k == 0):
+        hout1, hout2 = forward_pass(x, hin1, hin2, wub[:2])
+
+        x_next = one_hot_encode(data, i + 1)
+
+        loss += cross_entropy(softmax(dense(v, hout2) + c), x_next)
+
+        if (i != 0) and (i % k == 0):
             loss.backward()
 
             for params in wub[:2] :
-                for i, param in enumerate(params) :
+                for param in params :
                     rate = 1.
                     sgd(param, rate)
             for param in wub[2:] :
@@ -96,39 +110,35 @@ def train_model_arr(data, k=5, hd=100, wub=None, hin1=None, hin2=None) :
             hin2 = Tensor(hout2.data)
 
             wub = ((wz1, uz1, bz1, wr1, ur1, br1, wh1, uh1, bh1), (wz2, uz2, bz2, wr2, ur2, br2, wh2, uh2, bh2), v, c)
+            x = x_next
         else :
             hin1 = hout1
             hin2 = hout2
+            x = x_next
+
+        if i % 1000 == 0 :
+            rnn_data.append([wub, hin1, hin2])
+            save()
+
     return wub, hout1, hout2
 
 
-def test_model_arr(wub, hin1, hin2, time, k=5, hd=100) :
+def test_model(wub, hin1, hin2, length, k=5, hd=100) :
     """
-    OLD MODEL - TESTS ON ARRAYS
-    time in sec
+    length of chars
     """
-    ticks = 2 * time * 96
-    wub1, wub2, v, c = wub
-    x = he_normal((len(v), 1))
-    song_arr = np.empty((ticks, len(v)))
+    ls = []
+    x = one_hot_encode()
+    while len(ls) < length :
+        hout1, hout2 = forward_pass(x, hin1, hin2, wub[:2])
+        index = np.argmax(softmax(dense(v, hout2) + c).data)
+        ls.append(keys(index))
 
-    for tick in range(ticks) :
-        hout1, hout2 = forward_pass(x, hin1.data, hin2.data, (wub1, wub2))
-        song_arr[tick] = round_notes(sigmoid(dense(v, hout2) + c).data)
-
+        x = ls[-1]
         hin1 = hout1
         hin2 = hout2
-        x = song_arr[tick]
 
-    return song_arr
-
-
-def round_notes(tick_arr, tolerance=.1) :
-    """
-    tick_arr : ndarray
-    tolerance : size of uncertainty allowed for rounding up (above 1-tolerance is rounded up)
-    """
-    return np.where(tick_arr >= 1 - tolerance, 1, 0)
+    return ls
 
 
 def sgd(param, rate) :
@@ -165,9 +175,9 @@ def forward_pass(x, hin1, hin2, wub) :
     wz2, uz2, bz2, wr2, ur2, br2, wh2, uh2, bh2 = wub2
 
     # first layer
-    zt1 = sigmoid(dense(uz1, x[:, np.newaxis]) + dense(wz1, hin1) + bz1)
-    rt1 = sigmoid(dense(ur1, x[:, np.newaxis]) + dense(wr1, hin1) + br1)
-    ht1 = tanh(dense(uh1, x[:, np.newaxis]) + dense(wh1, (hin1 * rt1)) + bh1)
+    zt1 = sigmoid(dense(uz1, x) + dense(wz1, hin1) + bz1)
+    rt1 = sigmoid(dense(ur1, x) + dense(wr1, hin1) + br1)
+    ht1 = tanh(dense(uh1, x) + dense(wh1, (hin1 * rt1)) + bh1)
     hout1 = (1 - zt1) * hin1 + zt1 * ht1
 
     # second layer
@@ -215,6 +225,21 @@ def he_normal(shape):
     return np.random.randn(*shape) * scale
 
 
+def one_hot_encode(data=None, i=None) :
+    """
+    optional params. both must be filled if one is. if neither, one hot encode a space
+    """
+    if (data is not None and i is None) or (data is None and i is None) :
+        raise Exception("Either both data and i must be passed values, or neither are passed values")
+    elif data is not None and i is not None :
+        x = np.zeros((len(keys), 1))
+        x[keys.index(data[i])] = 1
+    else :
+        x = np.zeros((len(keys), 1))
+        x[-1] = 1
+    return x
+
+
 def import_midi(filename) :
     """
     Converts midi file to ndarray of shape (num_ticks, num_notes)
@@ -258,4 +283,57 @@ def import_midi(filename) :
 
     array_song = np.sum(array_song, -1)
 
-    return array_song
+    ls_song = []
+
+    for tick in array_song[::4,21:109] :
+        indices = np.where(tick == 1)
+        indices = indices[0]
+
+        temp_ls = []
+        for index in indices :
+            temp_ls.append(keys[index])
+        ls_song.append("".join(temp_ls))
+
+    str_song = " ".join(ls_song)
+
+    return array_song, ls_song, str_song
+
+'''
+def str_to_arr(str_song) :
+    """
+    data = str
+    """
+    arr_song = np.zeros((len(str_song.split()), len(keys) - 1))
+    tick = 0
+    for char in data :
+        if char == keys[-1]
+            tick += 1
+        else :
+            arr_song[tick, keys.index(char)] = 1
+
+    return arr_song
+
+
+def arr_to_midi(arr_song) :
+    """
+    arr_song = ndarray
+    """
+    mid = MidiFile()
+    track = MidiTrack()
+    mid.tracks.append(track)
+
+    current_notes = np.where(arr_song[0] == 1)[0].tolist()
+    # track.append(Message('note_on', note=64, velocity=64, time=32))
+    for tick in range(1, len(arr_song)) :
+        if arr_song[tick] != arr_song[tick - 1] :
+
+        else :
+            continue
+'''
+
+def save() :
+    '''
+    Saves face_data to a .pickle file
+    '''
+    with open(os.path.join(os.path.dirname(os.path.realpath(__file__)), "music_gen.pickle"), 'wb') as f:
+        pickle.dump(rnn_data, f, pickle.HIGHEST_PROTOCOL)
