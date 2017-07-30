@@ -14,6 +14,9 @@ keys = ["!", "$", "%", "&", "(", ")", "*", "+", ",", "-", ".", "/", "0", "1", "2
         "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "{", "|", " "]
 
 rnn_data = []
+with open(os.path.join(os.path.dirname(os.path.realpath(__file__)), "music_gen.pickle"), 'rb') as f:
+    rnn_data = pickle.load(f)
+
 
 def train_model(data, k=5, hd=700, wub=None, hin1=None, hin2=None) :
     """
@@ -71,10 +74,11 @@ def train_model(data, k=5, hd=700, wub=None, hin1=None, hin2=None) :
         x_next = one_hot_encode(data, i + 1)
 
         loss += cross_entropy(softmax(dense(v, hout2) + c), x_next)
+        loss.backward()
+        loss.null_creators()
 
         if (i != 0) and (i % k == 0):
-            loss.backward()
-
+            print("reset")
             for params in wub[:2] :
                 for param in params :
                     rate = 1.
@@ -82,8 +86,6 @@ def train_model(data, k=5, hd=700, wub=None, hin1=None, hin2=None) :
             for param in wub[2:] :
                 rate = 1.
                 sgd(param, rate)
-
-            loss.null_gradients()
 
             loss = Tensor(0)
             wz1 = Tensor(wz1.data)
@@ -117,9 +119,9 @@ def train_model(data, k=5, hd=700, wub=None, hin1=None, hin2=None) :
             x = x_next
 
         if i % 1000 == 0 :
-            rnn_data.append([wub, hin1, hin2])
+            rnn_data.append([wub, hin1, hin2, i])
             save()
-
+    rnn_data.append([None])
     return wub, hout1, hout2
 
 
@@ -131,10 +133,19 @@ def test_model(wub, hin1, hin2, length, k=5, hd=100) :
     x = one_hot_encode()
     while len(ls) < length :
         hout1, hout2 = forward_pass(x, hin1, hin2, wub[:2])
-        index = np.argmax(softmax(dense(v, hout2) + c).data)
-        ls.append(keys(index))
 
-        x = ls[-1]
+        # working softmax
+        d = np.dot(wub[2].data, hout2.data) + wub[3].data
+        np.exp(d, out=d)
+        sm = d / np.sum(d)
+        index = np.argmax(sm)
+
+        # tensor softmax not working, no idea why
+        # index = np.argmax(softmax(dense(wub[2], hout2) + wub[3]).data)
+
+        ls.append(keys[index])
+
+        x = one_hot_encode(ls[-1], 0)
         hin1 = hout1
         hin2 = hout2
 
@@ -229,7 +240,7 @@ def one_hot_encode(data=None, i=None) :
     """
     optional params. both must be filled if one is. if neither, one hot encode a space
     """
-    if (data is not None and i is None) or (data is None and i is None) :
+    if (data is not None and i is None) or (data is None and i is not None) :
         raise Exception("Either both data and i must be passed values, or neither are passed values")
     elif data is not None and i is not None :
         x = np.zeros((len(keys), 1))
@@ -240,7 +251,7 @@ def one_hot_encode(data=None, i=None) :
     return x
 
 
-def import_midi(filename) :
+def import_midi(filename, sr) :
     """
     Converts midi file to ndarray of shape (num_ticks, num_notes)
         0 for note off; 1 for note on
@@ -285,7 +296,7 @@ def import_midi(filename) :
 
     ls_song = []
 
-    for tick in array_song[::4,21:109] :
+    for tick in array_song[::sr,21:109] :
         indices = np.where(tick == 1)
         indices = indices[0]
 
