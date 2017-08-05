@@ -1,7 +1,10 @@
 from distutils.core import setup
 from setuptools import find_packages
 
-# TODO: UPDATE SETUP
+try:
+    import mido
+except ImportError:
+    print("Warning: `mido` must be installed in order to use `rnn_music`")
 
 setup(name='rnn_music',
       version='1.0',
