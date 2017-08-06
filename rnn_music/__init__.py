@@ -29,6 +29,7 @@ def import_dir(directory) :
         else:
             continue
 
+
 def import_midi(filename) :
     """
     Converts midi file to ndarray of shape (num_ticks, num_notes)
